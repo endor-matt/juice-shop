@@ -22,6 +22,18 @@ export function orderHistory () {
   }
 }
 
+export function orderById () {
+  return async (req: Request, res: Response, next: NextFunction) => {
+    const loggedInUser = security.authenticatedUsers.get(req.headers?.authorization?.replace('Bearer ', ''))
+    if (!loggedInUser?.data?.email) {
+      next(new Error('Blocked illegal activity by ' + req.socket.remoteAddress))
+      return
+    }
+    const order = await ordersCollection.findOne({ orderId: req.params.id })
+    res.status(200).json({ status: 'success', data: order })
+  }
+}
+
 export function allOrders () {
   return async (req: Request, res: Response, next: NextFunction) => {
     const order = await ordersCollection.find()
