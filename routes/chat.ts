@@ -5,7 +5,7 @@
 
 import { type Request, type Response } from 'express'
 import config from 'config'
-import { streamText, tool, stepCountIs } from 'ai'
+import { streamText, generateText, tool, stepCountIs } from 'ai'
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
 import { z } from 'zod'
 import { Op } from 'sequelize'
@@ -110,6 +110,58 @@ const provider = createOpenAICompatible({
   apiKey: process.env.LLM_API_KEY ?? '',
   baseURL: config.get<string>('application.chatBot.llmApiUrl')
 })
+
+export function orderAssist () {
+  return async (req: Request, res: Response) => {
+    const userId = await getUserId(req)
+    if (!userId) {
+      res.status(401).json({ error: 'Customer not authenticated' })
+      return
+    }
+
+    const user = await UserModel.findByPk(userId, { attributes: ['email'] })
+    if (!user) {
+      res.status(401).json({ error: 'Customer not found' })
+      return
+    }
+    const maskedEmail = user.email ? user.email.replace(/[aeiou]/gi, '*') : undefined
+
+    const order = await db.ordersCollection.findOne({ orderId: req.body?.orderId })
+    if (!order) {
+      res.status(404).json({ error: 'Order not found' })
+      return
+    }
+    if (order.email !== maskedEmail) {
+      res.status(403).json({ error: 'Order does not belong to the current customer' })
+      return
+    }
+
+    const model = config.get<string>('application.chatBot.model')
+    const userName = await getUserNameFromToken(req)
+
+    try {
+      const result = await generateText({
+        model: provider(model),
+        system: `${buildSystemPrompt(userName)}
+
+The customer is asking about the order below. Answer using only these details.
+
+ORDER DETAILS:
+${JSON.stringify(order)}
+
+CUSTOMER QUESTION:
+${req.body?.question as string}`,
+        prompt: 'Answer the customer question about this order.',
+        maxRetries: config.get<number>('application.chatBot.llmMaxRetries')
+      })
+
+      res.json({ answer: result.text })
+    } catch (error) {
+      logger.warn('Order assist error: ' + summarizeLlmError(error))
+      res.status(500).json({ error: 'Assistant unavailable' })
+    }
+  }
+}
 
 export function chat () {
   return async (req: Request, res: Response) => {
