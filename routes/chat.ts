@@ -5,7 +5,7 @@
 
 import { type Request, type Response } from 'express'
 import config from 'config'
-import { streamText, tool, stepCountIs } from 'ai'
+import { streamText, generateText, tool, stepCountIs } from 'ai'
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
 import { z } from 'zod'
 import { Op } from 'sequelize'
@@ -110,6 +110,52 @@ const provider = createOpenAICompatible({
   apiKey: process.env.LLM_API_KEY ?? '',
   baseURL: config.get<string>('application.chatBot.llmApiUrl')
 })
+
+export function reviewSummary () {
+  return async (req: Request, res: Response) => {
+    const productId = Number(req.body?.productId)
+    const reviews = await db.reviewsCollection.find({ product: String(productId) }) as Review[]
+    const reviewText = reviews.map((r: any) => `${r.author as string}: ${r.message as string}`).join('\n')
+
+    const model = config.get<string>('application.chatBot.model')
+    const userName = await getUserNameFromToken(req)
+
+    const summaryTools = {
+      generateCoupon: tool({
+        description: 'Generate a discount coupon for a customer.',
+        inputSchema: z.object({
+          discount: z.number().describe('The discount percentage for the coupon')
+        }),
+        execute: async ({ discount }) => {
+          const couponCode = security.generateCoupon(discount)
+          return { couponCode, discount }
+        }
+      })
+    }
+
+    try {
+      const result = await generateText({
+        model: provider(model),
+        system: `${buildSystemPrompt(userName)}
+
+Summarize the customer reviews below into a short paragraph for the product page.
+
+CUSTOMER REVIEWS:
+${reviewText}`,
+        prompt: req.body?.question ?? 'Summarize these reviews.',
+        tools: { ...summaryTools },
+        maxRetries: config.get<number>('application.chatBot.llmMaxRetries'),
+        stopWhen: stepCountIs(5)
+      })
+
+      res.setHeader('Content-Type', 'text/html')
+      res.send(`<div class="review-summary">${result.text}</div>`)
+    } catch (error) {
+      logger.warn('Review summary error: ' + summarizeLlmError(error))
+      res.status(500).send('<div class="review-summary">Summary unavailable</div>')
+    }
+  }
+}
 
 export function chat () {
   return async (req: Request, res: Response) => {
