@@ -119,9 +119,20 @@ export function orderAssist () {
       return
     }
 
+    const user = await UserModel.findByPk(userId, { attributes: ['email'] })
+    if (!user) {
+      res.status(401).json({ error: 'Customer not found' })
+      return
+    }
+    const maskedEmail = user.email ? user.email.replace(/[aeiou]/gi, '*') : undefined
+
     const order = await db.ordersCollection.findOne({ orderId: req.body?.orderId })
     if (!order) {
       res.status(404).json({ error: 'Order not found' })
+      return
+    }
+    if (order.email !== maskedEmail) {
+      res.status(403).json({ error: 'Order does not belong to the current customer' })
       return
     }
 
